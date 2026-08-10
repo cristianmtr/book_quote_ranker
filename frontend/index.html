@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>BookQuotes</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <h1>BookQuotes</h1>
+  <p class="subtitle">Extract the passages from your Candidates that read most like your Priors.</p>
+
+  <form id="upload-form">
+    <div class="field">
+      <label for="candidates">Candidates (EPUB novels)</label>
+      <input type="file" id="candidates" name="candidates" accept=".epub" multiple required />
+    </div>
+    <div class="field">
+      <label for="priors">Priors (Markdown, quotes separated by horizontal rules)</label>
+      <input type="file" id="priors" name="priors" accept=".md,.markdown" required />
+    </div>
+    <div class="field">
+      <label for="k">Samples per book (K)</label>
+      <input type="number" id="k" name="k" value="3" min="1" max="10" />
+    </div>
+    <button type="submit" id="submit-btn">Process</button>
+  </form>
+
+  <section id="status-section" hidden>
+    <h2>Status</h2>
+    <p id="job-state"></p>
+    <ul id="book-status-list"></ul>
+  </section>
+
+  <section id="results-section" hidden>
+    <h2>Results</h2>
+    <div id="results"></div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 720px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  color: #222;
+}
+
+h1 { margin-bottom: 0.2rem; }
+.subtitle { color: #555; margin-top: 0; }
+
+.field {
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+label { font-weight: 600; }
+
+input[type="number"] { width: 5rem; }
+
+button {
+  padding: 0.6rem 1.2rem;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+#status-section, #results-section {
+  margin-top: 2rem;
+  border-top: 1px solid #ddd;
+  padding-top: 1rem;
+}
+
+.book-result {
+  margin-bottom: 2rem;
+  padding: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+.book-result h3 { margin-top: 0; }
+
+.score {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+blockquote {
+  margin: 0.3rem 0 1rem 0;
+  padding-left: 0.8rem;
+  border-left: 3px solid #ccc;
+  white-space: pre-wrap;
+}
+
+.error { color: #b00020; }
+
+.download-link {
+  display: inline-block;
+  margin-top: 0.5rem;
+}

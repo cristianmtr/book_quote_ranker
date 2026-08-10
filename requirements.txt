@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+python-multipart
+ebooklib
+beautifulsoup4
+lxml
+markdownify
+markdown
+sentence-transformers
+numpy
+pysbd
