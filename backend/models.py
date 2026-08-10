@@ -35,6 +35,8 @@ class Sample:
     chunk: Chunk
     score: float
     rank: int
+    matched_prior_text: str = ""
+    position_fraction: float = 0.0  # 0..1, position of the chunk within the full (untruncated) book
 
 
 @dataclass
@@ -43,7 +45,8 @@ class BookResult:
     filename: str
     status: BookStatus = "pending"
     samples: list[Sample] = field(default_factory=list)
-    output_epub_path: Path | None = None
+    aggregate_score: float = 0.0  # mean of sample scores; lets Candidates be ranked against each other
+    output_path: Path | None = None
     error: str | None = None
 
 
@@ -55,6 +58,7 @@ class BookResultSummary(BaseModel):
     filename: str
     status: str
     sample_count: int
+    aggregate_score: float = 0.0
     error: str | None = None
 
 
@@ -62,6 +66,7 @@ class JobStatus(BaseModel):
     job_id: str
     state: Literal["uploaded", "processing", "done", "error"]
     k: int
+    spoiler_fraction: float
     books: list[BookResultSummary]
     created_at: datetime
     updated_at: datetime

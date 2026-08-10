@@ -5,9 +5,6 @@ liked from other books ("Priors"). BookQuotes extracts the top-K passages per
 Candidate that read most like your Priors ("Samples"), and lets you download
 one merged EPUB of Samples per Candidate.
 
-See [`.claude/plans/linked-frolicking-dusk.md`](.claude/plans/linked-frolicking-dusk.md)
-for the full design rationale.
-
 ## Setup
 
 Requires Python 3.11+.

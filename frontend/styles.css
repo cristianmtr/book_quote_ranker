@@ -19,6 +19,7 @@ h1 { margin-bottom: 0.2rem; }
 label { font-weight: 600; }
 
 input[type="number"] { width: 5rem; }
+input[type="range"] { width: 100%; max-width: 300px; }
 
 button {
   padding: 0.6rem 1.2rem;
@@ -56,6 +57,22 @@ blockquote {
 }
 
 .error { color: #b00020; }
+
+details {
+  margin: 0 0 1rem 0;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+details summary {
+  cursor: pointer;
+  color: #666;
+}
+
+details ul {
+  margin: 0.4rem 0 0 0;
+  padding-left: 1.2rem;
+}
 
 .download-link {
   display: inline-block;

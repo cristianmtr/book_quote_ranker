@@ -23,14 +23,22 @@ class JobStore:
         self._book_results: dict[str, dict[str, BookResult]] = {}
         self._candidates: dict[str, list[tuple[str, Path, str]]] = {}
 
-    def create(self, job_id: str, k: int, books: list[tuple[str, str]]) -> JobStatus:
+    def create(
+        self, job_id: str, k: int, spoiler_fraction: float, books: list[tuple[str, str]]
+    ) -> JobStatus:
         now = datetime.now(timezone.utc)
         summaries = [
             BookResultSummary(book_id=book_id, filename=filename, status="pending", sample_count=0)
             for book_id, filename in books
         ]
         status = JobStatus(
-            job_id=job_id, state="uploaded", k=k, books=summaries, created_at=now, updated_at=now
+            job_id=job_id,
+            state="uploaded",
+            k=k,
+            spoiler_fraction=spoiler_fraction,
+            books=summaries,
+            created_at=now,
+            updated_at=now,
         )
         with self._lock:
             self._jobs[job_id] = status
@@ -72,6 +80,7 @@ class JobStore:
                 if b.book_id == result.book_id:
                     b.status = result.status
                     b.sample_count = len(result.samples)
+                    b.aggregate_score = result.aggregate_score
                     b.error = result.error
                     break
             status.updated_at = datetime.now(timezone.utc)

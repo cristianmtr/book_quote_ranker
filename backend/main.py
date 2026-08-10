@@ -9,7 +9,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import DEFAULT_K
+from .config import DEFAULT_K, SPOILER_GUARD_FRACTION
 from .embeddings import get_embedder
 from .job_store import job_store
 from .models import JobStatus
@@ -36,6 +36,7 @@ async def create_job(
     candidates: list[UploadFile] = File(...),
     priors: UploadFile = File(...),
     k: int = Form(DEFAULT_K),
+    spoiler_fraction: float = Form(SPOILER_GUARD_FRACTION),
 ) -> JobStatus:
     job_id = str(uuid.uuid4())
     job_dir = UPLOAD_DIR / job_id
@@ -56,7 +57,7 @@ async def create_job(
         candidate_paths.append((book_id, dest, safe_name))
 
     job_store.register_candidates(job_id, candidate_paths)
-    return job_store.create(job_id, k, book_entries)
+    return job_store.create(job_id, k, spoiler_fraction, book_entries)
 
 
 def _run_job(job_id: str) -> None:
@@ -71,7 +72,8 @@ def _run_job(job_id: str) -> None:
     try:
         with _process_lock:  # serialize jobs against the shared embedding model
             results = process_books(
-                candidates, priors_path, job.k, out_dir, on_status, embedder=_state["embedder"]
+                candidates, priors_path, job.k, out_dir, on_status,
+                embedder=_state["embedder"], spoiler_fraction=job.spoiler_fraction,
             )
         for result in results:
             job_store.set_book_result(job_id, result)
@@ -108,8 +110,17 @@ def get_preview(job_id: str, book_id: str) -> dict:
         "filename": result.filename,
         "status": result.status,
         "error": result.error,
+        "aggregate_score": result.aggregate_score,
         "samples": [
-            {"rank": s.rank, "score": s.score, "text": s.chunk.text} for s in result.samples
+            {
+                "rank": s.rank,
+                "score": s.score,
+                "text": s.chunk.text,
+                "matched_prior_text": s.matched_prior_text,
+                "position_fraction": s.position_fraction,
+                "window_label": s.chunk.window_label,
+            }
+            for s in result.samples
         ],
     }
 
@@ -117,12 +128,12 @@ def get_preview(job_id: str, book_id: str) -> dict:
 @app.get("/api/jobs/{job_id}/books/{book_id}/download")
 def download(job_id: str, book_id: str) -> FileResponse:
     result = job_store.get_book_result(job_id, book_id)
-    if result is None or result.output_epub_path is None:
+    if result is None or result.output_path is None:
         raise HTTPException(404, "output not ready")
     return FileResponse(
-        result.output_epub_path,
-        filename=result.output_epub_path.name,
-        media_type="application/epub+zip",
+        result.output_path,
+        filename=result.output_path.name,
+        media_type="text/markdown",
     )
 
 

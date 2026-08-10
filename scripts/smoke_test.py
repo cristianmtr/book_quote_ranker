@@ -11,8 +11,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from backend.models import Chunk  # noqa: E402
-from backend.pipeline import _truncate_to_fraction  # noqa: E402
+from backend.models import Chunk, Prior, Sample  # noqa: E402
+from backend.pipeline import _truncate_to_fraction, merge_samples_markdown  # noqa: E402
 from backend.priors import parse_priors_markdown  # noqa: E402
 from backend.selection import NearestPriorMMRSelector  # noqa: E402
 from backend.text_utils import split_sentences  # noqa: E402
@@ -52,13 +52,27 @@ def _make_chunk(book_id: str, idx: int) -> Chunk:
 def test_mmr_with_k1_reduces_to_argmax():
     chunks = [_make_chunk("b", i) for i in range(5)]
     candidate_emb = np.eye(5, dtype=np.float32)  # mutually orthogonal, no overlap concerns
+    priors = [Prior(id="p0", text="prior zero", n_sentences=1, n_words=2)]
     prior_emb = np.array([[0.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float32)  # nearest to chunk 2
 
     selector = NearestPriorMMRSelector()
-    samples = selector.select(chunks, candidate_emb, prior_emb, k=1)
+    samples = selector.select(chunks, candidate_emb, priors, prior_emb, k=1)
 
     assert len(samples) == 1
     assert samples[0].chunk.id == chunks[2].id
+    assert samples[0].matched_prior_text == "prior zero"
+
+
+def test_merge_samples_markdown_includes_details_block():
+    chunk = _make_chunk("b", 0)
+    sample = Sample(chunk=chunk, score=0.5, rank=1, matched_prior_text="a prior", position_fraction=0.1)
+
+    doc = merge_samples_markdown("My Book", [sample])
+
+    assert "<details>" in doc and "<summary>Match details</summary>" in doc
+    assert "a prior" in doc
+    assert "~10% into the book" in doc
+    assert chunk.text in doc
 
 
 def test_truncate_to_fraction_keeps_only_early_paragraphs():

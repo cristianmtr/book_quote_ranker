@@ -22,6 +22,10 @@
       <label for="k">Samples per book (K)</label>
       <input type="number" id="k" name="k" value="3" min="1" max="10" />
     </div>
+    <div class="field">
+      <label for="spoiler-fraction">Only consider the first <span id="spoiler-fraction-value">20</span>% of each book (avoid spoilers)</label>
+      <input type="range" id="spoiler-fraction" name="spoiler-fraction" value="20" min="5" max="100" step="5" />
+    </div>
     <button type="submit" id="submit-btn">Process</button>
   </form>
 

@@ -5,7 +5,7 @@ from typing import Protocol
 import numpy as np
 
 from .config import MMR_LAMBDA, pool_size
-from .models import Chunk, Sample
+from .models import Chunk, Prior, Sample
 
 
 class Selector(Protocol):
@@ -13,6 +13,7 @@ class Selector(Protocol):
         self,
         candidates: list[Chunk],
         candidate_emb: np.ndarray,
+        priors: list[Prior],
         prior_emb: np.ndarray,
         k: int,
     ) -> list[Sample]: ...
@@ -54,13 +55,16 @@ class NearestPriorMMRSelector:
         self,
         candidates: list[Chunk],
         candidate_emb: np.ndarray,
+        priors: list[Prior],
         prior_emb: np.ndarray,
         k: int,
     ) -> list[Sample]:
         if not candidates:
             return []
 
-        relevance = (candidate_emb @ prior_emb.T).max(axis=1)
+        sim_matrix = candidate_emb @ prior_emb.T
+        relevance = sim_matrix.max(axis=1)
+        nearest_prior_idx = sim_matrix.argmax(axis=1)
 
         pool_n = min(len(candidates), self.pool_size_fn(k))
         pool_idx = list(np.argsort(-relevance)[:pool_n])
@@ -87,7 +91,13 @@ class NearestPriorMMRSelector:
             remaining.remove(pick)
 
         samples = [
-            Sample(chunk=candidates[i], score=float(relevance[i]), rank=0) for i in selected
+            Sample(
+                chunk=candidates[i],
+                score=float(relevance[i]),
+                rank=0,
+                matched_prior_text=priors[nearest_prior_idx[i]].text,
+            )
+            for i in selected
         ]
         samples.sort(key=lambda s: s.score, reverse=True)
         for rank, s in enumerate(samples, start=1):

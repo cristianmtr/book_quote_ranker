@@ -8,15 +8,16 @@ from typing import Callable
 from .chunking import ParagraphSentenceChunker
 from .config import SPOILER_GUARD_FRACTION
 from .embeddings import get_embedder
-from .epub_io import epub_to_markdown, markdown_to_epub
-from .models import BookResult, BookStatus, Sample
+from .epub_io import epub_to_markdown
+from .models import BookResult, BookStatus, Prior, Sample
 from .priors import parse_priors_file
 from .selection import NearestPriorMMRSelector
+from .text_utils import split_paragraphs, split_sentences
 
 StatusCallback = Callable[[str, BookStatus], None] | None
 
 
-def _window_sizes(priors) -> list[int]:
+def _window_sizes(priors: list[Prior]) -> list[int]:
     base = max(2, round(statistics.median(p.n_sentences for p in priors))) if priors else 3
     return sorted({max(1, round(0.5 * base)), base, round(1.5 * base)})
 
@@ -37,22 +38,49 @@ def _truncate_to_fraction(markdown_text: str, fraction: float) -> str:
     return "\n\n".join(kept)
 
 
+def _total_sentence_count(markdown_text: str) -> int:
+    return sum(len(split_sentences(p)) for p in split_paragraphs(markdown_text))
+
+
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "_", name).strip("_").lower()
     return slug or "book"
 
 
-def merge_samples_markdown(samples: list[Sample]) -> str:
-    return "\n\n---\n\n".join(s.chunk.text for s in samples)
+def merge_samples_markdown(title: str, samples: list[Sample]) -> str:
+    """Assembles the downloadable Samples document: each excerpt followed by
+    a collapsible <details> block with its match metadata, all separated by
+    horizontal rules."""
+    blocks = [f"# {title}"]
+    for s in samples:
+        position_pct = round(s.position_fraction * 100)
+        details = "\n".join(
+            [
+                "<details>",
+                "<summary>Match details</summary>",
+                "",
+                f"- **Rank:** {s.rank}",
+                f"- **Score:** {s.score:.3f}",
+                f"- **Position:** ~{position_pct}% into the book",
+                f"- **Window size:** {s.chunk.window_label}",
+                f"- **Closest Prior:** {s.matched_prior_text}",
+                "",
+                "</details>",
+            ]
+        )
+        blocks.append(f"{s.chunk.text}\n\n{details}")
+    return "\n\n---\n\n".join(blocks)
 
 
 def process_book(
     epub_path: Path,
     book_id: str,
     filename: str,
+    priors: list[Prior],
     prior_emb,
     window_sizes: list[int],
     k: int,
+    spoiler_fraction: float,
     embedder,
     chunker,
     selector,
@@ -69,7 +97,8 @@ def process_book(
     try:
         status("converting")
         markdown_text = epub_to_markdown(epub_path)
-        markdown_text = _truncate_to_fraction(markdown_text, SPOILER_GUARD_FRACTION)
+        markdown_text = _truncate_to_fraction(markdown_text, spoiler_fraction)
+        total_sentences = _total_sentence_count(markdown_text)
 
         status("chunking")
         chunks = chunker.chunk(book_id, markdown_text, window_sizes)
@@ -80,15 +109,23 @@ def process_book(
         chunk_emb = embedder.embed([c.text for c in chunks])
 
         status("selecting")
-        samples = selector.select(chunks, chunk_emb, prior_emb, k)
+        samples = selector.select(chunks, chunk_emb, priors, prior_emb, k)
+        for s in samples:
+            s.position_fraction = (
+                (s.chunk.start_sentence_idx / total_sentences) * spoiler_fraction
+                if total_sentences
+                else 0.0
+            )
         result.samples = samples
+        result.aggregate_score = sum(s.score for s in samples) / len(samples) if samples else 0.0
 
         status("assembling")
         title = f"{Path(filename).stem} — Samples"
-        merged_md = merge_samples_markdown(samples)
-        out_path = out_dir / f"{_slugify(Path(filename).stem)}_samples.epub"
-        markdown_to_epub(title, merged_md, out_path)
-        result.output_epub_path = out_path
+        merged_md = merge_samples_markdown(title, samples)
+        out_path = out_dir / f"{_slugify(Path(filename).stem)}_samples.md"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(merged_md, encoding="utf-8")
+        result.output_path = out_path
 
         status("done")
     except Exception as exc:  # noqa: BLE001 - isolate per-book failures so one bad EPUB doesn't fail the job
@@ -105,6 +142,7 @@ def process_books(
     out_dir: Path,
     on_status: StatusCallback = None,
     embedder=None,
+    spoiler_fraction: float = SPOILER_GUARD_FRACTION,
 ) -> list[BookResult]:
     """End-to-end pipeline: parse Priors once, derive window sizes and embed
     Priors once, then chunk/embed/select/assemble per candidate book. Single
@@ -131,7 +169,7 @@ def process_books(
 
     return [
         process_book(
-            Path(path), book_id, filename, prior_emb, window_sizes, k,
+            Path(path), book_id, filename, priors, prior_emb, window_sizes, k, spoiler_fraction,
             embedder, chunker, selector, out_dir, on_status,
         )
         for book_id, path, filename in candidate_paths
