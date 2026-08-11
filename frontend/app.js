@@ -96,26 +96,40 @@ async function renderResults(status) {
     const previewResp = await fetch(`/api/jobs/${status.job_id}/books/${book.book_id}/preview`);
     const preview = await previewResp.json();
 
-    const list = document.createElement("ol");
-    for (const sample of preview.samples) {
-      const item = document.createElement("li");
-      const positionPct = Math.round(sample.position_fraction * 100);
-      item.innerHTML = `
-        <span class="score">score ${sample.score.toFixed(3)}</span>
-        <blockquote>${escapeHtml(sample.text)}</blockquote>
-        <details>
-          <summary>Match details</summary>
-          <ul>
-            <li><strong>Rank:</strong> ${sample.rank}</li>
-            <li><strong>Score:</strong> ${sample.score.toFixed(3)}</li>
-            <li><strong>Position:</strong> ~${positionPct}% into the book</li>
-            <li><strong>Window size:</strong> ${escapeHtml(sample.window_label)}</li>
-            <li><strong>Closest Prior:</strong> ${escapeHtml(sample.matched_prior_text)}</li>
-          </ul>
-        </details>`;
-      list.appendChild(item);
+    const sectionTitles = { taste: "Matches Your Taste", representative: "Representative of This Book" };
+    for (const kind of ["taste", "representative"]) {
+      const group = preview.samples.filter((s) => s.kind === kind);
+      if (group.length === 0) continue;
+
+      const sectionHeading = document.createElement("h4");
+      sectionHeading.textContent = sectionTitles[kind];
+      card.appendChild(sectionHeading);
+
+      const list = document.createElement("ol");
+      for (const sample of group) {
+        const item = document.createElement("li");
+        const positionPct = Math.round(sample.position_fraction * 100);
+        const priorRow =
+          sample.kind === "taste"
+            ? `<li><strong>Closest Prior:</strong> ${escapeHtml(sample.matched_prior_text)}</li>`
+            : "";
+        item.innerHTML = `
+          <span class="score">score ${sample.score.toFixed(3)}</span>
+          <blockquote>${escapeHtml(sample.text)}</blockquote>
+          <details>
+            <summary>Match details</summary>
+            <ul>
+              <li><strong>Rank:</strong> ${sample.rank}</li>
+              <li><strong>Score:</strong> ${sample.score.toFixed(3)}</li>
+              <li><strong>Position:</strong> ~${positionPct}% into the book</li>
+              <li><strong>Window size:</strong> ${escapeHtml(sample.window_label)}</li>
+              ${priorRow}
+            </ul>
+          </details>`;
+        list.appendChild(item);
+      }
+      card.appendChild(list);
     }
-    card.appendChild(list);
 
     const downloadLink = document.createElement("a");
     downloadLink.href = `/api/jobs/${status.job_id}/books/${book.book_id}/download`;

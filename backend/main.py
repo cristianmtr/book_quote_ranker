@@ -116,6 +116,7 @@ def get_preview(job_id: str, book_id: str) -> dict:
                 "rank": s.rank,
                 "score": s.score,
                 "text": s.chunk.text,
+                "kind": s.kind,
                 "matched_prior_text": s.matched_prior_text,
                 "position_fraction": s.position_fraction,
                 "window_label": s.chunk.window_label,

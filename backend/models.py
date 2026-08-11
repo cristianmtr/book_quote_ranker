@@ -8,8 +8,10 @@ from typing import Literal
 from pydantic import BaseModel
 
 BookStatus = Literal[
-    "pending", "converting", "chunking", "embedding", "selecting", "assembling", "done", "error"
+    "pending", "converting", "chunking", "embedding", "clustering", "assembling", "done", "error"
 ]
+
+SampleKind = Literal["taste", "representative"]
 
 
 @dataclass
@@ -35,8 +37,9 @@ class Sample:
     chunk: Chunk
     score: float
     rank: int
-    matched_prior_text: str = ""
-    position_fraction: float = 0.0  # 0..1, position of the chunk within the full (untruncated) book
+    kind: SampleKind = "taste"
+    matched_prior_text: str = ""  # only set for kind == "taste"
+    position_fraction: float = 0.0  # 0..1, position of the chunk within the full book
 
 
 @dataclass

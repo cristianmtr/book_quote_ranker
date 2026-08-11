@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Protocol
 
 import numpy as np
+from sklearn.cluster import KMeans
 
-from .config import MMR_LAMBDA, pool_size
 from .models import Chunk, Prior, Sample
 
 
@@ -13,9 +13,11 @@ class Selector(Protocol):
         self,
         candidates: list[Chunk],
         candidate_emb: np.ndarray,
+        position_fractions: np.ndarray,
         priors: list[Prior],
         prior_emb: np.ndarray,
         k: int,
+        spoiler_fraction: float,
     ) -> list[Sample]: ...
 
 
@@ -33,73 +35,91 @@ class NoOpReranker:
         return samples
 
 
-def _overlap_frac(a: Chunk, b: Chunk) -> float:
-    lo = max(a.start_sentence_idx, b.start_sentence_idx)
-    hi = min(a.end_sentence_idx, b.end_sentence_idx)
-    overlap = max(0, hi - lo + 1)
-    a_len = a.end_sentence_idx - a.start_sentence_idx + 1
-    return overlap / a_len if a_len else 0.0
+class ClusterRepresentativeSelector:
+    """K-means clusters chunk embeddings across the WHOLE book, so cluster
+    structure reflects the book's actual thematic/stylistic makeup — not
+    just its early pages. Each of the K clusters stands in for one of the
+    book's major modes/themes.
 
+    Output is deliberately two parallel groups, both restricted to chunks
+    positioned within the spoiler-safe window (spoiler_fraction):
+      - "taste":          per cluster, the chunk most similar to any single
+                           Prior (best taste-match example of that theme).
+      - "representative": per cluster, the chunk closest to that cluster's
+                           centroid (typifies that theme, Priors-agnostic).
 
-class NearestPriorMMRSelector:
-    """Relevance = max cosine similarity to any single Prior (not centroid),
-    since Priors are thematically diverse. Diversity via MMR over a bounded
-    top-relevance pool, with a hard skip on heavily-overlapping sentence
-    ranges (guards against near-duplicate windows of different sizes)."""
+    Scanning happens over every chunk in the book; only the *selection* is
+    restricted to the safe window, so representativeness is judged against
+    the book's real structure while nothing past the spoiler boundary is
+    ever returned.
+    """
 
-    def __init__(self, mmr_lambda: float = MMR_LAMBDA, pool_size_fn=pool_size):
-        self.mmr_lambda = mmr_lambda
-        self.pool_size_fn = pool_size_fn
+    def __init__(self, random_state: int = 0):
+        self.random_state = random_state
 
     def select(
         self,
         candidates: list[Chunk],
         candidate_emb: np.ndarray,
+        position_fractions: np.ndarray,
         priors: list[Prior],
         prior_emb: np.ndarray,
         k: int,
+        spoiler_fraction: float,
     ) -> list[Sample]:
         if not candidates:
             return []
 
+        n_clusters = max(1, min(k, len(candidates)))
+        kmeans = KMeans(n_clusters=n_clusters, n_init="auto", random_state=self.random_state)
+        labels = kmeans.fit_predict(candidate_emb)
+
+        centers = kmeans.cluster_centers_
+        center_norms = np.linalg.norm(centers, axis=1, keepdims=True)
+        center_norms[center_norms == 0] = 1.0
+        centers = centers / center_norms  # candidate_emb is already L2-normalized
+
         sim_matrix = candidate_emb @ prior_emb.T
-        relevance = sim_matrix.max(axis=1)
+        prior_relevance = sim_matrix.max(axis=1)
         nearest_prior_idx = sim_matrix.argmax(axis=1)
 
-        pool_n = min(len(candidates), self.pool_size_fn(k))
-        pool_idx = list(np.argsort(-relevance)[:pool_n])
+        safe_mask = position_fractions <= spoiler_fraction
 
-        selected: list[int] = []
-        remaining = list(pool_idx)
+        taste_samples: list[Sample] = []
+        representative_samples: list[Sample] = []
 
-        while len(selected) < k and remaining:
-            if not selected:
-                pick = max(remaining, key=lambda i: relevance[i])
-            else:
+        for cluster_id in range(n_clusters):
+            in_cluster_safe = np.where((labels == cluster_id) & safe_mask)[0]
+            if len(in_cluster_safe) == 0:
+                continue  # this theme has no safe (early-book) example to show
 
-                def mmr_score(i: int) -> float:
-                    if any(_overlap_frac(candidates[i], candidates[j]) > 0.5 for j in selected):
-                        return float("-inf")
-                    diversity_penalty = max(float(candidate_emb[i] @ candidate_emb[j]) for j in selected)
-                    return self.mmr_lambda * relevance[i] - (1 - self.mmr_lambda) * diversity_penalty
-
-                scored = [(mmr_score(i), i) for i in remaining]
-                best_score, pick = max(scored, key=lambda t: t[0])
-                if best_score == float("-inf"):
-                    break  # everything left overlaps too heavily with what's already picked
-            selected.append(pick)
-            remaining.remove(pick)
-
-        samples = [
-            Sample(
-                chunk=candidates[i],
-                score=float(relevance[i]),
-                rank=0,
-                matched_prior_text=priors[nearest_prior_idx[i]].text,
+            centroid_sims = candidate_emb[in_cluster_safe] @ centers[cluster_id]
+            best_repr = in_cluster_safe[int(np.argmax(centroid_sims))]
+            representative_samples.append(
+                Sample(
+                    chunk=candidates[best_repr],
+                    score=float(centroid_sims.max()),
+                    rank=0,
+                    kind="representative",
+                    position_fraction=float(position_fractions[best_repr]),
+                )
             )
-            for i in selected
-        ]
-        samples.sort(key=lambda s: s.score, reverse=True)
-        for rank, s in enumerate(samples, start=1):
-            s.rank = rank
-        return samples
+
+            best_taste = in_cluster_safe[int(np.argmax(prior_relevance[in_cluster_safe]))]
+            taste_samples.append(
+                Sample(
+                    chunk=candidates[best_taste],
+                    score=float(prior_relevance[best_taste]),
+                    rank=0,
+                    kind="taste",
+                    matched_prior_text=priors[nearest_prior_idx[best_taste]].text,
+                    position_fraction=float(position_fractions[best_taste]),
+                )
+            )
+
+        for group in (taste_samples, representative_samples):
+            group.sort(key=lambda s: s.score, reverse=True)
+            for rank, s in enumerate(group, start=1):
+                s.rank = rank
+
+        return taste_samples + representative_samples

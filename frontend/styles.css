@@ -43,6 +43,7 @@ button:disabled { cursor: not-allowed; opacity: 0.6; }
 }
 
 .book-result h3 { margin-top: 0; }
+.book-result h4 { margin: 1.2rem 0 0.4rem 0; color: #444; }
 
 .score {
   font-size: 0.85rem;

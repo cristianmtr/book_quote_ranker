@@ -24,7 +24,7 @@ def main() -> None:
         "--spoiler-fraction",
         type=float,
         default=SPOILER_GUARD_FRACTION,
-        help="Only consider this leading fraction (0-1) of each book, to avoid spoilers",
+        help="Only return matches from this leading fraction (0-1) of each book, to avoid spoilers",
     )
     args = parser.parse_args()
 
@@ -40,15 +40,20 @@ def main() -> None:
 
     results.sort(key=lambda r: r.aggregate_score, reverse=True)
     for r in results:
-        print(f"\n=== {r.filename} ({r.status}) -- overall match {r.aggregate_score:.3f} ===")
+        print(f"\n=== {r.filename} ({r.status}) -- overall taste match {r.aggregate_score:.3f} ===")
         if r.error:
             print("ERROR:", r.error)
             continue
-        for s in r.samples:
-            preview = s.chunk.text[:150].replace("\n", " ")
-            prior_preview = s.matched_prior_text[:80].replace("\n", " ")
-            print(f"  rank={s.rank} score={s.score:.3f} pos={s.position_fraction * 100:.0f}% :: {preview}...")
-            print(f"      closest prior: {prior_preview}...")
+        for kind, label in (("taste", "MATCHES YOUR TASTE"), ("representative", "REPRESENTATIVE OF BOOK")):
+            print(f"  -- {label} --")
+            for s in r.samples:
+                if s.kind != kind:
+                    continue
+                preview = s.chunk.text[:150].replace("\n", " ")
+                print(f"    rank={s.rank} score={s.score:.3f} pos={s.position_fraction * 100:.0f}% :: {preview}...")
+                if s.kind == "taste":
+                    prior_preview = s.matched_prior_text[:80].replace("\n", " ")
+                    print(f"        closest prior: {prior_preview}...")
         print(f"  -> {r.output_path}")
 
 

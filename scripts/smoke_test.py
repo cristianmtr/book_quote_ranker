@@ -12,9 +12,9 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.models import Chunk, Prior, Sample  # noqa: E402
-from backend.pipeline import _truncate_to_fraction, merge_samples_markdown  # noqa: E402
+from backend.pipeline import merge_samples_markdown  # noqa: E402
 from backend.priors import parse_priors_markdown  # noqa: E402
-from backend.selection import NearestPriorMMRSelector  # noqa: E402
+from backend.selection import ClusterRepresentativeSelector  # noqa: E402
 from backend.text_utils import split_sentences  # noqa: E402
 
 
@@ -49,40 +49,57 @@ def _make_chunk(book_id: str, idx: int) -> Chunk:
     )
 
 
-def test_mmr_with_k1_reduces_to_argmax():
-    chunks = [_make_chunk("b", i) for i in range(5)]
-    candidate_emb = np.eye(5, dtype=np.float32)  # mutually orthogonal, no overlap concerns
+def test_cluster_selector_scans_whole_book_but_returns_only_safe_chunks():
+    # Two obvious 2D clusters: {0, 1} lean +x, {2, 3} lean +y.
+    chunks = [_make_chunk("b", i) for i in range(4)]
+    candidate_emb = np.array(
+        [
+            [1.0, 0.0],    # chunk 0: safe, +x cluster
+            [0.9, 0.436],  # chunk 1: UNSAFE (late in book), +x cluster
+            [0.436, 0.9],  # chunk 2: UNSAFE (late in book), +y cluster
+            [0.0, 1.0],    # chunk 3: safe, +y cluster
+        ],
+        dtype=np.float32,
+    )
+    position_fractions = np.array([0.05, 0.9, 0.9, 0.1])
     priors = [Prior(id="p0", text="prior zero", n_sentences=1, n_words=2)]
-    prior_emb = np.array([[0.0, 0.0, 1.0, 0.0, 0.0]], dtype=np.float32)  # nearest to chunk 2
+    prior_emb = np.array([[1.0, 0.0]], dtype=np.float32)
 
-    selector = NearestPriorMMRSelector()
-    samples = selector.select(chunks, candidate_emb, priors, prior_emb, k=1)
+    selector = ClusterRepresentativeSelector()
+    samples = selector.select(chunks, candidate_emb, position_fractions, priors, prior_emb, k=2, spoiler_fraction=0.2)
 
-    assert len(samples) == 1
-    assert samples[0].chunk.id == chunks[2].id
-    assert samples[0].matched_prior_text == "prior zero"
+    returned_ids = {s.chunk.id for s in samples}
+    assert returned_ids == {"0", "3"}, f"unsafe (late-book) chunks leaked into output: {returned_ids}"
+
+    kinds = [s.kind for s in samples]
+    assert kinds.count("taste") == 2, "expected one taste-match per cluster"
+    assert kinds.count("representative") == 2, "expected one representative pick per cluster"
+
+    for s in samples:
+        if s.kind == "taste":
+            assert s.matched_prior_text == "prior zero"
+        else:
+            assert s.matched_prior_text == ""
 
 
-def test_merge_samples_markdown_includes_details_block():
-    chunk = _make_chunk("b", 0)
-    sample = Sample(chunk=chunk, score=0.5, rank=1, matched_prior_text="a prior", position_fraction=0.1)
+def test_merge_samples_markdown_sections_and_details():
+    taste = Sample(
+        chunk=_make_chunk("b", 0), score=0.5, rank=1, kind="taste",
+        matched_prior_text="a prior", position_fraction=0.1,
+    )
+    representative = Sample(
+        chunk=_make_chunk("b", 1), score=0.4, rank=1, kind="representative", position_fraction=0.05,
+    )
 
-    doc = merge_samples_markdown("My Book", [sample])
+    doc = merge_samples_markdown("My Book", [taste, representative])
 
+    assert "## Matches Your Taste" in doc
+    assert "## Representative of This Book" in doc
     assert "<details>" in doc and "<summary>Match details</summary>" in doc
     assert "a prior" in doc
     assert "~10% into the book" in doc
-    assert chunk.text in doc
-
-
-def test_truncate_to_fraction_keeps_only_early_paragraphs():
-    paragraphs = [f"word{i} " * 10 for i in range(10)]  # 10 paragraphs, 10 words each
-    text = "\n\n".join(paragraphs)
-
-    truncated = _truncate_to_fraction(text, 0.2)
-
-    assert truncated == "\n\n".join(paragraphs[:2]), "expected only the first ~20% of paragraphs"
-    assert "word9" not in truncated, "spoiler guard leaked a late paragraph"
+    # representative samples are Priors-agnostic — no "Closest Prior" line for them
+    assert doc.count("Closest Prior") == 1
 
 
 def main() -> None:

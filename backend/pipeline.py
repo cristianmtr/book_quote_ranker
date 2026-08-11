@@ -5,37 +5,25 @@ import statistics
 from pathlib import Path
 from typing import Callable
 
+import numpy as np
+
 from .chunking import ParagraphSentenceChunker
 from .config import SPOILER_GUARD_FRACTION
 from .embeddings import get_embedder
 from .epub_io import epub_to_markdown
 from .models import BookResult, BookStatus, Prior, Sample
 from .priors import parse_priors_file
-from .selection import NearestPriorMMRSelector
+from .selection import ClusterRepresentativeSelector
 from .text_utils import split_paragraphs, split_sentences
 
 StatusCallback = Callable[[str, BookStatus], None] | None
+
+SECTION_TITLES = {"taste": "Matches Your Taste", "representative": "Representative of This Book"}
 
 
 def _window_sizes(priors: list[Prior]) -> list[int]:
     base = max(2, round(statistics.median(p.n_sentences for p in priors))) if priors else 3
     return sorted({max(1, round(0.5 * base)), base, round(1.5 * base)})
-
-
-def _truncate_to_fraction(markdown_text: str, fraction: float) -> str:
-    """Keep only the first `fraction` of the book's words (cut at paragraph
-    boundaries), so later chunking/selection never sees later plot points."""
-    paragraphs = markdown_text.split("\n\n")
-    target_words = max(1, int(sum(len(p.split()) for p in paragraphs) * fraction))
-
-    kept: list[str] = []
-    word_count = 0
-    for para in paragraphs:
-        kept.append(para)
-        word_count += len(para.split())
-        if word_count >= target_words:
-            break
-    return "\n\n".join(kept)
 
 
 def _total_sentence_count(markdown_text: str) -> int:
@@ -47,28 +35,35 @@ def _slugify(name: str) -> str:
     return slug or "book"
 
 
+def _sample_block(s: Sample) -> str:
+    position_pct = round(s.position_fraction * 100)
+    lines = [
+        "<details>",
+        "<summary>Match details</summary>",
+        "",
+        f"- **Rank:** {s.rank}",
+        f"- **Score:** {s.score:.3f}",
+        f"- **Position:** ~{position_pct}% into the book",
+        f"- **Window size:** {s.chunk.window_label}",
+    ]
+    if s.kind == "taste":
+        lines.append(f"- **Closest Prior:** {s.matched_prior_text}")
+    lines += ["", "</details>"]
+    return f"{s.chunk.text}\n\n" + "\n".join(lines)
+
+
 def merge_samples_markdown(title: str, samples: list[Sample]) -> str:
-    """Assembles the downloadable Samples document: each excerpt followed by
-    a collapsible <details> block with its match metadata, all separated by
-    horizontal rules."""
+    """Assembles the downloadable Samples document: a "Matches Your Taste"
+    section followed by a "Representative of This Book" section, each excerpt
+    followed by a collapsible <details> block with its match metadata, all
+    separated by horizontal rules."""
     blocks = [f"# {title}"]
-    for s in samples:
-        position_pct = round(s.position_fraction * 100)
-        details = "\n".join(
-            [
-                "<details>",
-                "<summary>Match details</summary>",
-                "",
-                f"- **Rank:** {s.rank}",
-                f"- **Score:** {s.score:.3f}",
-                f"- **Position:** ~{position_pct}% into the book",
-                f"- **Window size:** {s.chunk.window_label}",
-                f"- **Closest Prior:** {s.matched_prior_text}",
-                "",
-                "</details>",
-            ]
-        )
-        blocks.append(f"{s.chunk.text}\n\n{details}")
+    for kind in ("taste", "representative"):
+        group = [s for s in samples if s.kind == kind]
+        if not group:
+            continue
+        blocks.append(f"## {SECTION_TITLES[kind]}")
+        blocks.extend(_sample_block(s) for s in group)
     return "\n\n---\n\n".join(blocks)
 
 
@@ -96,8 +91,7 @@ def process_book(
 
     try:
         status("converting")
-        markdown_text = epub_to_markdown(epub_path)
-        markdown_text = _truncate_to_fraction(markdown_text, spoiler_fraction)
+        markdown_text = epub_to_markdown(epub_path)  # full book — no truncation
         total_sentences = _total_sentence_count(markdown_text)
 
         status("chunking")
@@ -107,17 +101,20 @@ def process_book(
 
         status("embedding")
         chunk_emb = embedder.embed([c.text for c in chunks])
+        position_fractions = np.array(
+            [c.start_sentence_idx / total_sentences if total_sentences else 0.0 for c in chunks]
+        )
 
-        status("selecting")
-        samples = selector.select(chunks, chunk_emb, priors, prior_emb, k)
-        for s in samples:
-            s.position_fraction = (
-                (s.chunk.start_sentence_idx / total_sentences) * spoiler_fraction
-                if total_sentences
-                else 0.0
-            )
+        status("clustering")
+        samples = selector.select(
+            chunks, chunk_emb, position_fractions, priors, prior_emb, k, spoiler_fraction
+        )
         result.samples = samples
-        result.aggregate_score = sum(s.score for s in samples) / len(samples) if samples else 0.0
+
+        taste_samples = [s for s in samples if s.kind == "taste"]
+        result.aggregate_score = (
+            sum(s.score for s in taste_samples) / len(taste_samples) if taste_samples else 0.0
+        )
 
         status("assembling")
         title = f"{Path(filename).stem} — Samples"
@@ -145,8 +142,13 @@ def process_books(
     spoiler_fraction: float = SPOILER_GUARD_FRACTION,
 ) -> list[BookResult]:
     """End-to-end pipeline: parse Priors once, derive window sizes and embed
-    Priors once, then chunk/embed/select/assemble per candidate book. Single
+    Priors once, then chunk/embed/cluster/assemble per candidate book. Single
     orchestration entry point shared by the CLI and the FastAPI job runner.
+
+    Every candidate book is chunked and embedded in full (no truncation) so
+    that clustering reflects the book's real structure; `spoiler_fraction`
+    is applied inside the selector, restricting only which chunks may be
+    *returned*, not what's scanned to determine representativeness.
 
     `embedder` can be passed in as a shared, already-loaded instance (the
     FastAPI app loads it once at startup) to avoid reloading model weights
@@ -162,7 +164,7 @@ def process_books(
     prior_emb = embedder.embed([p.text for p in priors])
 
     chunker = ParagraphSentenceChunker()
-    selector = NearestPriorMMRSelector()
+    selector = ClusterRepresentativeSelector()
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
